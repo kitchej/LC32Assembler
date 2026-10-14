@@ -46,6 +46,7 @@ DEBUG = True
 
 """AI CODE START"""
 
+
 class TokenType(Enum):
     END_OF_FILE = auto()
 
@@ -65,10 +66,12 @@ class TokenType(Enum):
     LABEL = auto()
     DIRECTIVE = auto()
 
+
 class Token(NamedTuple):
     lexeme: str
     type: TokenType
     line_no: int
+
 
 # Reserved keywords, one list per instruction shape
 OP_NO_OPERAND_KEYWORDS = ["NOP", "HALT", "RET", "RETI"]
@@ -92,45 +95,47 @@ for words, type in [
     for w in words:
         KEYWORD_TABLE[w] = type
 
+
 def classify_symbol(lexeme: str) -> TokenType:
     """Return the opcode token type if lexeme is reserved, else SYMBOL."""
     return KEYWORD_TABLE.get(lexeme.upper(), TokenType.SYMBOL)
 
+
 instruction_formats = {
-    "NOP":   "R",
-    "ADD":   "R",
-    "ADDI":  "I",
-    "AND":   "R",
-    "ANDI":  "I",
-    "BRN":   "J",
-    "BRP":   "J",
-    "BRZ":   "J",
-    "DIV":   "R",
-    "JAL":   "J",
-    "JMP":   "J",
-    "JAlA":  "R",
-    "LB":    "I",
-    "LBI":   "I",
-    "LBS":   "R",
-    "LW":    "I",
-    "LWI":   "I",
-    "MULT":  "R",
-    "NOT":   "R",
-    "OR":    "R",
-    "ORI":   "I",
-    "RBS":   "R",
-    "RET":   "J",
-    "SB":    "I",
-    "SBI":   "I",
-    "SUB":   "R",
-    "SUBI":  "I",
-    "SW":    "I",
-    "SWI":   "I",
+    "NOP": "R",
+    "ADD": "R",
+    "ADDI": "I",
+    "AND": "R",
+    "ANDI": "I",
+    "BRN": "J",
+    "BRP": "J",
+    "BRZ": "J",
+    "DIV": "R",
+    "JAL": "J",
+    "JMP": "J",
+    "JAlA": "R",
+    "LB": "I",
+    "LBI": "I",
+    "LBS": "R",
+    "LW": "I",
+    "LWI": "I",
+    "MULT": "R",
+    "NOT": "R",
+    "OR": "R",
+    "ORI": "I",
+    "RBS": "R",
+    "RET": "J",
+    "SB": "I",
+    "SBI": "I",
+    "SUB": "R",
+    "SUBI": "I",
+    "SW": "I",
+    "SWI": "I",
     "INTER": "J",
-    "XOR":   "R",
-    "XORI":  "I",
-    "HALT":  "R",
-    "RETI":  "J",
+    "XOR": "R",
+    "XORI": "I",
+    "HALT": "R",
+    "RETI": "J",
 }
 
 REGISTERS = {
@@ -206,6 +211,7 @@ def encode_rtype(opcode, dest, src, trgt):
     instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11)
     return instruction & 0xFFFFFFFF
 
+
 def encode_itype(opcode, dest, src, imm17):
     """
     I-type format:
@@ -213,6 +219,7 @@ def encode_itype(opcode, dest, src, imm17):
     """
     instruction = (opcode << 26) | (dest << 21) | (src << 17) | (imm17 & 0x1FFFF)
     return instruction & 0xFFFFFFFF
+
 
 def encode_jtype(opcode, offset26):
     """
@@ -223,6 +230,7 @@ def encode_jtype(opcode, offset26):
     instruction = (opcode << 26) | (offset26 & 0x3FFFFFF)
     return instruction & 0xFFFFFFFF
 
+
 def write_uint32_to_buffer(buffer, offset, value):
     """
     Write a 32-bit unsigned integer to a byte buffer in little-endian format.
@@ -232,18 +240,37 @@ def write_uint32_to_buffer(buffer, offset, value):
         offset: byte offset in the buffer
         value: 32-bit unsigned integer value
     """
-    buffer[offset:offset+4] = struct.pack('<I', value & 0xFFFFFFFF)
+    buffer[offset:offset + 4] = struct.pack('<I', value & 0xFFFFFFFF)
+
 
 """AI CODE END"""
 
-def syntax_error(token, expected):
+class MissingErrorArgument(Exception):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+class TooManyArguments(Exception):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+def syntax_error(token, expected=None, msg=None):
     """
     For bad syntax in the input program
     """
-    print(f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
+    if expected is None and msg is not None:
+        print(f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
+    elif msg is None and expected is not None:
+        print(msg)
+    elif msg and expected:
+        raise TooManyArguments("Cannot supply both a msg and an expected token")
+    else:
+        raise MissingErrorArgument("Must supply either a msg or an expected token")
+
+
     if DEBUG:
         traceback.print_stack()
     sys.exit(5)
+
 
 def parser_error(line_no, msg):
     """
@@ -254,6 +281,7 @@ def parser_error(line_no, msg):
         traceback.print_stack()
     sys.exit(6)
 
+
 def assembler_error(instruction, msg):
     """
     For when the assembling step breaks
@@ -262,6 +290,7 @@ def assembler_error(instruction, msg):
     if DEBUG:
         traceback.print_stack()
     sys.exit(7)
+
 
 def lexical_analysis(lines: list):
     """
@@ -298,12 +327,14 @@ def lexical_analysis(lines: list):
         line_no += 1
     return tokens + [Token('', TokenType.END_OF_FILE, line_no)], symbol_table
 
+
 """
 Parse functions
 
 Parameters: token_list
 Returns: linked list of Instruction objects
 """
+
 
 @dataclass
 class Instruction:
@@ -347,7 +378,8 @@ class Parser:
         if len(self.tokens) == 0:
             return Token("", TokenType.END_OF_FILE, 0)
         if how_far > len(self.tokens) or how_far < 0:
-            parser_error(self.line_no, f"\nParser.peek({how_far}) requested to peek beyond size of tokens list ({len(self.tokens) - 1})")
+            parser_error(self.line_no,
+                         f"\nParser.peek({how_far}) requested to peek beyond size of tokens list ({len(self.tokens) - 1})")
         return self.tokens[how_far - 1]
 
     def _get_token(self):
@@ -477,6 +509,7 @@ class Parser:
         """
         token = self._expect(TokenType.OPI_TWO_OPERAND)
         dest = self._expect(TokenType.SYMBOL)
+        self._parse_register(dest)
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
             syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM])
         imm17 = self._get_token()
@@ -493,21 +526,6 @@ class Parser:
         offset26 = self._get_token()
         return Instruction(opcode=token, offset26=offset26)
 
-    def _parse_symbol(self):
-        pass
-
-    def _parse_register(self):
-        pass
-
-    def _parse_dest(self):
-        pass
-
-    def _parse_src(self):
-        pass
-
-    def _parse_trgt(self):
-        pass
-
     def _parse_imm17(self):
         pass
 
@@ -520,7 +538,11 @@ class Parser:
     def _parse_dec_num(self):
         pass
 
+    def _parse_symbol(self):
+        pass
 
+    def _parse_register(self):
+        pass
 
 
 def assemble_executable(program_list):
@@ -528,7 +550,7 @@ def assemble_executable(program_list):
     curr = program_list
     while curr is not None:
         try:
-            instr_format = instruction_formats[curr]
+            instr_format = instruction_formats[curr.opcode]
         except KeyError:
             assembler_error(curr, f"{curr.opcode} has an unknown format")
             return
@@ -540,7 +562,7 @@ def assemble_executable(program_list):
             return
 
         if instr_format == "R":
-                instruction = encode_rtype(opcode, curr.dest, curr.src, curr.trgt)
+            instruction = encode_rtype(opcode, curr.dest, curr.src, curr.trgt)
         elif instr_format == "I":
             instruction = encode_itype(opcode, curr.dest, curr.src, curr.imm17)
         elif instr_format == "J":
@@ -548,6 +570,7 @@ def assemble_executable(program_list):
 
         curr = curr.next
     return
+
 
 def main():
     if len(sys.argv) != 2:
@@ -578,6 +601,7 @@ def main():
     #     curr = curr.next
     # Convert to LC32 machine code
     executable = assemble_executable(program_list)
+
 
 if __name__ == '__main__':
     main()
