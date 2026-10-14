@@ -523,42 +523,51 @@ class Parser:
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL]):
             syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL])
 
-        offset26 = self._get_token()
+        offset26 = self._vet_numerical_value(self._get_token())
         return Instruction(opcode=token, offset26=offset26)
 
-    def _parse_imm17(self):
-        pass
+    def _vet_numerical_value(self, value):
+        num = self._vet_dec_num(value)
+        if not num:
+            num = self._vet_hex_num(value)
+        if not num:
+            syntax_error(value, [TokenType.HEX_NUM, TokenType.DEC_NUM])
+        return num
 
-    def _parse_offset26(self):
-        pass
+    def _vet_hex_num(self, value):
+        try:
+            return bytes.fromhex(value)
+        except ValueError:
+            return
 
-    def _parse_hex_num(self):
-        pass
+    def _vet_dec_num(self, value):
+        try:
+            return int(value)
+        except ValueError:
+            return
 
-    def _parse_dec_num(self):
-        pass
-
-    def _parse_symbol(self):
-        pass
-
-    def _parse_register(self):
-        pass
+    def _vet_register(self, value):
+        try:
+            return REGISTERS[value]
+        except KeyError:
+            return
 
 
 def assemble_executable(program_list):
     out = bytearray()
     curr = program_list
     while curr is not None:
+        opcode = curr.opcode.lexeme.upper()
         try:
-            instr_format = instruction_formats[curr.opcode]
+            instr_format = instruction_formats[opcode]
         except KeyError:
-            assembler_error(curr, f"{curr.opcode} has an unknown format")
+            assembler_error(curr, f"{opcode} has an unknown format")
             return
 
         try:
-            opcode = OPCODES[curr.opcode]
+            opcode = OPCODES[opcode]
         except KeyError:
-            assembler_error(curr, f"{curr.opcode} is not a valid instruction")
+            assembler_error(curr, f"{opcode} is not a valid instruction")
             return
 
         if instr_format == "R":
@@ -566,7 +575,7 @@ def assemble_executable(program_list):
         elif instr_format == "I":
             instruction = encode_itype(opcode, curr.dest, curr.src, curr.imm17)
         elif instr_format == "J":
-            instruction = encode_itype(opcode)
+            instruction = encode_jtype(opcode, curr.lexeme)
 
         curr = curr.next
     return
