@@ -1,5 +1,6 @@
 """
 Tokens:
+
 OP_NO_OPERAND     = "NOP" | "HALT" | "RET" | "RETI"
 OPR_ONE_OPERAND   = "JALA"
 OPR_TWO_OPERAND   = "NOT" | "LBI" | "LWI" | "SBI" | "SWI"
@@ -10,19 +11,27 @@ OP_JUMP           = "BRN" | "BRP" | "BRZ" | "JAL" | "JMP" | "INTER"
 CHAR              = a..z  | A..Z
 DIGIT             = 0..9
 HEX_DIGIT         = DIGIT | a..f | A..F
-HEX_NUM           = $HEX_DIGIT {HEX_DIGIT}
-DEC_NUM           = DIGIT {DIGIT}
-SYMBOL            = CHAR {CHAR | DIGIT}
-LABEL             = SYMBOL:
-DIRECTIVE         = .SYMBOL
+REGISTER          = (a, r, s, t, v) DIGIT {DIGIT}
+
 
 Grammar:
+
 Program          = Instruction_list
 Instruction_list = (DIRECTIVE | LABEL | Instruction) {DIRECTIVE | LABEL | Instruction}
 Instruction      = ROpcode | IOpcode | JOpcode | OP_NO_OPERAND
-ROpocde          = OPR_ONE_OPERAND SYMBOL | OPR_TWO_OPERAND SYMBOL SYMBOL | OPR_THREE_OPERAND SYMBOL SYMBOL SYMBOL
-IOpcode          = OPI_TWO_OPERAND SYMBOL (HEX_NUM | DEC_NUM) | OPI_THREE_OPERAND SYMBOL SYMBOL (HEX_NUM | DEC_NUM)
-JOpcode          = OP_JUMP (SYMBOL | HEX_HUM | DEC_NUM)
+ROpocde          = OPR_ONE_OPERAND symbol | OPR_TWO_OPERAND symbol symbol | OPR_THREE_OPERAND symbol symbol symbol
+IOpcode          = OPI_TWO_OPERAND symbol (HEX_NUM | DEC_NUM) | OPI_THREE_OPERAND symbol symbol (HEX_NUM | DEC_NUM)
+JOpcode          = OP_JUMP (label | HEX_HUM | DEC_NUM)
+dest             = symbol
+src              = symbol
+trgt             = symbol
+imm17            = hex_num | dec_num
+offset26         = hex_num | dec_num
+directive        = .symbol
+label            = symbol:
+hex_num          = $HEX_DIGIT {HEX_DIGIT}
+dec_num          = DIGIT {DIGIT}
+symbol           = CHAR {CHAR | DIGIT}
 """
 import struct
 import sys
@@ -36,7 +45,6 @@ MAX_UINT_32 = 0xFFFFFFFF
 DEBUG = True
 
 """AI CODE START"""
-
 
 class TokenType(Enum):
     END_OF_FILE = auto()
@@ -88,7 +96,70 @@ def classify_symbol(lexeme: str) -> TokenType:
     """Return the opcode token type if lexeme is reserved, else SYMBOL."""
     return KEYWORD_TABLE.get(lexeme.upper(), TokenType.SYMBOL)
 
-# Opcode definitions (matching the CPU's Opcode enum)
+instruction_formats = {
+    "NOP":   "R",
+    "ADD":   "R",
+    "ADDI":  "I",
+    "AND":   "R",
+    "ANDI":  "I",
+    "BRN":   "J",
+    "BRP":   "J",
+    "BRZ":   "J",
+    "DIV":   "R",
+    "JAL":   "J",
+    "JMP":   "J",
+    "JAlA":  "R",
+    "LB":    "I",
+    "LBI":   "I",
+    "LBS":   "R",
+    "LW":    "I",
+    "LWI":   "I",
+    "MULT":  "R",
+    "NOT":   "R",
+    "OR":    "R",
+    "ORI":   "I",
+    "RBS":   "R",
+    "RET":   "J",
+    "SB":    "I",
+    "SBI":   "I",
+    "SUB":   "R",
+    "SUBI":  "I",
+    "SW":    "I",
+    "SWI":   "I",
+    "INTER": "J",
+    "XOR":   "R",
+    "XORI":  "I",
+    "HALT":  "R",
+    "RETI":  "J",
+}
+
+REGISTERS = {
+    "R0": 0,
+    "R1": 1,
+    "R2": 2,
+    "R3": 3,
+    "R4": 4,
+    "R5": 5,
+    "R6": 6,
+    "R7": 7,
+    "RA": 8,
+    "A0": 9,
+    "A1": 10,
+    "A2": 11,
+    "V0": 12,
+    "V1": 13,
+    "SP": 14,
+    "SF": 15,
+    "T1": 16,
+    "T2": 17,
+    "T3": 18,
+    "T4": 19,
+    "T5": 20,
+    "T6": 21,
+    "T7": 22,
+    "T8": 23,
+}
+
 OPCODES = {
     'NOP': 0,
     'ADD': 1,
@@ -130,7 +201,7 @@ OPCODES = {
 def encode_rtype(opcode, dest, src, trgt):
     """
     R-type format:
-    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [21-16: 5 bits] | **TRGT** [15-11: 5 bits] | **Unused** [10-0: 11 bits]
+    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [21-16: 5 bits] | **TRGT** [15-11: 5 bits] |**SHMAT** [10-6: 5 bits] | **Unused** [5-0: 6 bits]
     """
     instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11)
     return instruction & 0xFFFFFFFF
@@ -163,30 +234,34 @@ def write_uint32_to_buffer(buffer, offset, value):
     """
     buffer[offset:offset+4] = struct.pack('<I', value & 0xFFFFFFFF)
 
-def print_word_hexdump(buffer, start_offset, end_offset):
-    """
-    Print a 4-byte-per-row hexdump of the buffer, reading each row as a
-    little-endian uint32_t (matching memoryController::readWord's byte assembly), so the
-    printed value is exactly what the CPU will decode -- no manual byte
-    reversal needed to compare against expected instruction values.
-
-    Equivalent to: hexdump -e '"%08_ax: " 1/4 "%08x" "\\n"' dummy_file.bin
-    """
-    for offset in range(start_offset, end_offset, 4):
-        word = struct.unpack_from('<I', buffer, offset)[0]
-        print(f"{offset:08x}: {word:08x}")
-
 """AI CODE END"""
 
 def syntax_error(token, expected):
+    """
+    For bad syntax in the input program
+    """
     print(f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
+    if DEBUG:
+        traceback.print_stack()
     sys.exit(5)
 
 def parser_error(line_no, msg):
+    """
+    For when parser itself fails
+    """
     print(f"Parser error while parsing line {line_no}: {msg}")
     if DEBUG:
         traceback.print_stack()
     sys.exit(6)
+
+def assembler_error(instruction, msg):
+    """
+    For when the assembling step breaks
+    """
+    print(f"Error while assembling {instruction.opcode} instruction: {msg}")
+    if DEBUG:
+        traceback.print_stack()
+    sys.exit(7)
 
 def lexical_analysis(lines: list):
     """
@@ -227,7 +302,7 @@ def lexical_analysis(lines: list):
 Parse functions
 
 Parameters: token_list
-Returns: linked list of Instructions
+Returns: linked list of Instruction objects
 """
 
 @dataclass
@@ -236,21 +311,24 @@ class Instruction:
     dest: str = ""
     src: str = ""
     trgt: str = ""
-    imm16: str = ""
+    imm17: str = ""
     shamt: str = ""
     offset26: str = ""
     directive: str = ""
     next: Optional["Instruction"] = None
 
-    def __repr__(self):
-        parts = []
-        for f in self.fields():
-            if f.name == "next":
-                continue
-            value = getattr(self, f.name)
-            if value:
-                parts.append(f"{f.name}={value!r}")
-        return f"Instruction({', '.join(parts)})"
+    def __str__(self):
+        if self.opcode != "":
+            if self.trgt != "":
+                return f"{self.opcode} {self.dest} {self.src} {self.trgt}"
+            elif self.shamt != "":
+                return f"{self.opcode} {self.dest} {self.shamt}"
+            elif self.imm17 != "":
+                return f"{self.opcode} {self.dest} {self.src} {self.imm17}"
+            elif self.offset26 != "":
+                return f"{self.opcode} {self.offset26}"
+            else:
+                return self.directive
 
 
 class Parser:
@@ -260,21 +338,30 @@ class Parser:
         self.line_no = 0
 
     def parse_program(self):
-        return self._parse_Instruction_list()
+        return self._parse_instruction_list()
 
     def _peek(self, how_far):
+        """
+        Look ahead to tokens comming up
+        """
         if len(self.tokens) == 0:
             return Token("", TokenType.END_OF_FILE, 0)
-        if how_far >= len(self.tokens) or how_far <= 0:
+        if how_far > len(self.tokens) or how_far < 0:
             parser_error(self.line_no, f"\nParser.peek({how_far}) requested to peek beyond size of tokens list ({len(self.tokens) - 1})")
         return self.tokens[how_far - 1]
 
     def _get_token(self):
+        """
+        Get token only
+        """
         if len(self.tokens) == 0:
-            return Token("", TokenType.END_OF_FILE)
+            return Token(0, "", TokenType.END_OF_FILE)
         return self.tokens.pop(0)
 
     def _expect(self, token_type):
+        """
+        Get token and check it against supplied token type
+        """
         token = self._get_token()
         if token.type != token_type:
             syntax_error(token, token_type)
@@ -285,9 +372,12 @@ class Parser:
 
     @staticmethod
     def _first(token, token_set):
+        """
+        Check if a token starts with a member of the supplied token set
+        """
         return token.type in token_set
 
-    def _parse_Instruction_list(self):
+    def _parse_instruction_list(self):
         next_token = self._peek(1)
         instruction_list = None
         current_instruction = None
@@ -304,8 +394,12 @@ class Parser:
                     break
                 temp.next = current_instruction
             next_token = self._peek(1)
+        return instruction_list
 
     def _parse_Instruction(self):
+        """
+        Instruction_list = (DIRECTIVE | LABEL | Instruction) {DIRECTIVE | LABEL | Instruction}
+        """
         token = self._peek(1)
         if token.type == TokenType.END_OF_FILE:
             return None
@@ -331,51 +425,129 @@ class Parser:
         return instruction
 
     def _parse_OP_NO_OPERAND(self):
+        """
+        OP_NO_OPERAND     = "NOP" | "HALT" | "RET" | "RETI"
+        """
         token = self._expect(TokenType.OP_NO_OPERAND)
-        return Instruction(opcode=token.lexeme)
+        return Instruction(opcode=token)
 
     def _parse_OPR_ONE_OPERAND(self):
+        """
+        OPR_ONE_OPERAND   = "JALA"
+        """
         token = self._expect(TokenType.OPR_ONE_OPERAND)
         src = self._expect(TokenType.SYMBOL)
-        return Instruction(opcode=token.lexeme, src=src)
+
+        return Instruction(opcode=token, src=src)
 
     def _parse_OPR_TWO_OPERAND(self):
+        """
+        OPR_TWO_OPERAND   = "NOT" | "LBI" | "LWI" | "SBI" | "SWI"
+        """
         token = self._expect(TokenType.OPR_TWO_OPERAND)
         dest = self._expect(TokenType.SYMBOL)
         src = self._expect(TokenType.SYMBOL)
-        return Instruction(opcode=token.lexeme, dest=dest, src=src)
+        return Instruction(opcode=token, dest=dest, src=src)
 
     def _parse_OPR_THREE_OPERAND(self):
+        """
+        OPR_THREE_OPERAND = "ADD" | "AND" | "DIV" | "LBS" | "MULT" | "OR" | "RBS" | "SUB" | "XOR"
+        """
         token = self._expect(TokenType.OPR_THREE_OPERAND)
         dest = self._expect(TokenType.SYMBOL)
         src = self._expect(TokenType.SYMBOL)
         trgt = self._expect(TokenType.SYMBOL)
-        return Instruction(opcode=token.lexeme, dest=dest, src=src, trgt=trgt)
+        return Instruction(opcode=token, dest=dest, src=src, trgt=trgt)
 
     def _parse_OPI_THREE_OPERAND(self):
+        """
+        OPI_THREE_OPERAND = "ADDI" | "ANDI" | "ORI" | "SUBI" | "XORI"
+        """
         token = self._expect(TokenType.OPI_THREE_OPERAND)
         dest = self._expect(TokenType.SYMBOL)
         src = self._expect(TokenType.SYMBOL)
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
             syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM])
-        imm16 = self._get_token()
-        return Instruction(opcode=token.lexeme, dest=dest, src=src, imm16=imm16)
+        imm17 = self._get_token()
+        return Instruction(opcode=token, dest=dest, src=src, imm17=imm17)
 
     def _parse_OPI_TWO_OPERAND(self):
+        """
+        OPI_TWO_OPERAND   = "LB" | "LW" | "SB" | "SW"
+        """
         token = self._expect(TokenType.OPI_TWO_OPERAND)
         dest = self._expect(TokenType.SYMBOL)
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
             syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM])
-        imm16 = self._get_token()
-        return Instruction(opcode=token.lexeme, dest=dest, imm16=imm16)
+        imm17 = self._get_token()
+        return Instruction(opcode=token, dest=dest, imm17=imm17)
 
     def _parse_OP_JUMP(self):
+        """
+        OP_JUMP           = "BRN" | "BRP" | "BRZ" | "JAL" | "JMP" | "INTER"
+        """
         token = self._expect(TokenType.OP_JUMP)
-        if not self._first(self.peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL]):
+        if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL]):
             syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL])
 
         offset26 = self._get_token()
-        return Instruction(opcode=token.lexeme, offset26=offset26)
+        return Instruction(opcode=token, offset26=offset26)
+
+    def _parse_symbol(self):
+        pass
+
+    def _parse_register(self):
+        pass
+
+    def _parse_dest(self):
+        pass
+
+    def _parse_src(self):
+        pass
+
+    def _parse_trgt(self):
+        pass
+
+    def _parse_imm17(self):
+        pass
+
+    def _parse_offset26(self):
+        pass
+
+    def _parse_hex_num(self):
+        pass
+
+    def _parse_dec_num(self):
+        pass
+
+
+
+
+def assemble_executable(program_list):
+    out = bytearray()
+    curr = program_list
+    while curr is not None:
+        try:
+            instr_format = instruction_formats[curr]
+        except KeyError:
+            assembler_error(curr, f"{curr.opcode} has an unknown format")
+            return
+
+        try:
+            opcode = OPCODES[curr.opcode]
+        except KeyError:
+            assembler_error(curr, f"{curr.opcode} is not a valid instruction")
+            return
+
+        if instr_format == "R":
+                instruction = encode_rtype(opcode, curr.dest, curr.src, curr.trgt)
+        elif instr_format == "I":
+            instruction = encode_itype(opcode, curr.dest, curr.src, curr.imm17)
+        elif instr_format == "J":
+            instruction = encode_itype(opcode)
+
+        curr = curr.next
+    return
 
 def main():
     if len(sys.argv) != 2:
@@ -397,15 +569,15 @@ def main():
     data_offset = 0
     # Lexical analysis
     tokens, symbol_table = lexical_analysis(program_text)
-    print(tokens)
     # Parse
     parser = Parser(tokens, symbol_table)
     program_list = parser.parse_program()
-    curr = program_list
-    while program_list != None:
-        print(curr.__repr__())
-        curr = curr.next
+    # curr = program_list
+    # while curr is not None:
+    #     print(curr)
+    #     curr = curr.next
     # Convert to LC32 machine code
+    executable = assemble_executable(program_list)
 
 if __name__ == '__main__':
     main()
