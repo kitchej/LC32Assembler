@@ -101,7 +101,7 @@ def classify_symbol(lexeme: str) -> TokenType:
     return KEYWORD_TABLE.get(lexeme.upper(), TokenType.SYMBOL)
 
 
-instruction_formats = {
+INSTRUCTION_FORMATS = {
     "NOP": "R",
     "ADD": "R",
     "ADDI": "I",
@@ -245,28 +245,34 @@ def write_uint32_to_buffer(buffer, offset, value):
 
 """AI CODE END"""
 
+
 class MissingErrorArgument(Exception):
-    def __init__(self, *args):
-        super().__init__(*args)
+    def __init__(self, msg):
+        self.msg = msg
+        super().__init__(self.msg)
+
 
 class TooManyArguments(Exception):
-    def __init__(self, *args):
-        super().__init__(*args)
+    def __init__(self, msg):
+        self.msg = msg
+        super().__init__(self.msg)
+
 
 def syntax_error(token, expected=None, msg=None):
     """
     For bad syntax in the input program
     """
+    print("SYNTAX ERROR: ", end='')
     if expected is None and msg is not None:
-        print(f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
-    elif msg is None and expected is not None:
         print(msg)
+    elif msg is None and expected is not None:
+        print(
+            f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
+
     elif msg and expected:
         raise TooManyArguments("Cannot supply both a msg and an expected token")
-    else:
+    elif msg is None and expected is None:
         raise MissingErrorArgument("Must supply either a msg or an expected token")
-
-
     if DEBUG:
         traceback.print_stack()
     sys.exit(5)
@@ -313,18 +319,25 @@ def lexical_analysis(lines: list):
                 break
             elif lexeme[-1] == ':':
                 label = lexeme.strip(':')
-                if not symbol_table.get(label):
-                    symbol_table.update({label: line_no})
+                if symbol_table.get(label):
+                    syntax_error(line_no, msg=f"Label '{label}' is already defined on line {symbol_table.get(label)}")
+                elif REGISTERS.get(label.upper()) or OPCODES.get(label.upper()):
+                    syntax_error(line_no, msg=f"Label '{label}' is a reserved keyword")
                 else:
-                    parser_error(line_no, f"{label} is already defined on line {symbol_table.get(label)}")
-                continue
+                    symbol_table.update({label: line_no})
+
             elif lexeme[0] == '$':
                 tokens.append(Token(lexeme.strip('$'), TokenType.HEX_NUM, line_no))
             elif lexeme.isnumeric():
                 tokens.append(Token(lexeme, TokenType.DEC_NUM, line_no))
             else:
-                tokens.append(Token(lexeme, classify_symbol(lexeme), line_no))
-        line_no += 1
+                token = Token(lexeme, classify_symbol(lexeme), line_no)
+                tokens.append(token)
+                if token.type in [TokenType.OP_JUMP, TokenType.OP_NO_OPERAND,
+                                  TokenType.OPR_ONE_OPERAND, TokenType.OPR_TWO_OPERAND,
+                                  TokenType.OPR_THREE_OPERAND, TokenType.OPI_TWO_OPERAND,
+                                  TokenType.OPI_THREE_OPERAND]:
+                    line_no += 1
     return tokens + [Token('', TokenType.END_OF_FILE, line_no)], symbol_table
 
 
@@ -396,10 +409,10 @@ class Parser:
         """
         token = self._get_token()
         if token.type != token_type:
-            syntax_error(token, token_type)
+            syntax_error(token, expected=token_type)
         if isinstance(token_type, list):
             if token.type not in token_type:
-                syntax_error(token, token_type)
+                syntax_error(token, expected=token_type)
         return token
 
     @staticmethod
@@ -426,6 +439,7 @@ class Parser:
                     break
                 temp.next = current_instruction
             next_token = self._peek(1)
+            self.line_no += 1
         return instruction_list
 
     def _parse_Instruction(self):
@@ -452,7 +466,7 @@ class Parser:
         elif opcode in OP_JUMP_KEYWORDS:
             instruction = self._parse_OP_JUMP()
         else:
-            syntax_error(token, "an opcode")
+            syntax_error(token, expected="an opcode")
 
         return instruction
 
@@ -460,15 +474,15 @@ class Parser:
         """
         OP_NO_OPERAND     = "NOP" | "HALT" | "RET" | "RETI"
         """
-        token = self._expect(TokenType.OP_NO_OPERAND)
-        return Instruction(opcode=token)
+        opcode = self._expect(TokenType.OP_NO_OPERAND)
+        return Instruction(opcode=opcode)
 
     def _parse_OPR_ONE_OPERAND(self):
         """
         OPR_ONE_OPERAND   = "JALA"
         """
         token = self._expect(TokenType.OPR_ONE_OPERAND)
-        src = self._expect(TokenType.SYMBOL)
+        src = self._vet_register(self._expect(TokenType.SYMBOL))
 
         return Instruction(opcode=token, src=src)
 
@@ -476,79 +490,116 @@ class Parser:
         """
         OPR_TWO_OPERAND   = "NOT" | "LBI" | "LWI" | "SBI" | "SWI"
         """
-        token = self._expect(TokenType.OPR_TWO_OPERAND)
-        dest = self._expect(TokenType.SYMBOL)
-        src = self._expect(TokenType.SYMBOL)
-        return Instruction(opcode=token, dest=dest, src=src)
+        opcode = self._expect(TokenType.OPR_TWO_OPERAND)
+        dest = self._vet_register(self._expect(TokenType.SYMBOL))
+        src = self._vet_register(self._expect(TokenType.SYMBOL))
+        return Instruction(opcode=opcode, dest=dest, src=src)
 
     def _parse_OPR_THREE_OPERAND(self):
         """
         OPR_THREE_OPERAND = "ADD" | "AND" | "DIV" | "LBS" | "MULT" | "OR" | "RBS" | "SUB" | "XOR"
         """
-        token = self._expect(TokenType.OPR_THREE_OPERAND)
-        dest = self._expect(TokenType.SYMBOL)
-        src = self._expect(TokenType.SYMBOL)
-        trgt = self._expect(TokenType.SYMBOL)
-        return Instruction(opcode=token, dest=dest, src=src, trgt=trgt)
+        opcode = self._expect(TokenType.OPR_THREE_OPERAND)
+        dest_tok = self._expect(TokenType.SYMBOL)
+        src_tok = self._expect(TokenType.SYMBOL)
+        dest = self._vet_register(dest_tok.lexeme)
+        src = self._vet_register(src_tok.lexeme)
+        if dest is None:
+            syntax_error(dest_tok, "valid register")
+        if src is None:
+            syntax_error(src_tok, "valid register")
+        shamt = -1
+        trgt = -1
+        if opcode.lexeme.upper() == "LBS" or opcode.lexeme.upper() == "RBS":
+            shamt = self._parse_numerical_value()
+        else:
+            trgt_tok = self._expect(TokenType.SYMBOL)
+            trgt = self._vet_register(trgt_tok.lexeme)
+            if trgt is None:
+                syntax_error(dest_tok, "valid register")
+        return Instruction(opcode=opcode.lexeme, dest=dest, src=src, trgt=trgt, shamt=shamt)
 
     def _parse_OPI_THREE_OPERAND(self):
         """
         OPI_THREE_OPERAND = "ADDI" | "ANDI" | "ORI" | "SUBI" | "XORI"
         """
-        token = self._expect(TokenType.OPI_THREE_OPERAND)
-        dest = self._expect(TokenType.SYMBOL)
-        src = self._expect(TokenType.SYMBOL)
+        opcode = self._expect(TokenType.OPI_THREE_OPERAND)
+        dest_tok = self._expect(TokenType.SYMBOL)
+        src_tok = self._expect(TokenType.SYMBOL)
+        dest = self._vet_register(dest_tok.lexeme)
+        src = self._vet_register(src_tok.lexeme)
+        if dest is None:
+            syntax_error(dest_tok, "valid register")
+        if src is None:
+            syntax_error(src_tok, "valid register")
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
-            syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM])
-        imm17 = self._get_token()
-        return Instruction(opcode=token, dest=dest, src=src, imm17=imm17)
+            syntax_error(self._peek(1), expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
+        imm17 = self._parse_numerical_value()
+        return Instruction(opcode=opcode.lexeme, dest=dest, src=src, imm17=imm17)
 
     def _parse_OPI_TWO_OPERAND(self):
         """
         OPI_TWO_OPERAND   = "LB" | "LW" | "SB" | "SW"
         """
-        token = self._expect(TokenType.OPI_TWO_OPERAND)
-        dest = self._expect(TokenType.SYMBOL)
-        self._parse_register(dest)
-        if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
-            syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM])
-        imm17 = self._get_token()
-        return Instruction(opcode=token, dest=dest, imm17=imm17)
+        opcode = self._expect(TokenType.OPI_TWO_OPERAND)
+        dest_tok = self._expect(TokenType.SYMBOL)
+        dest = self._vet_register(dest_tok.lexeme)
+        if dest is None:
+            syntax_error(dest_tok, "valid register")
+        imm17 = self._parse_numerical_value()
+        return Instruction(opcode=opcode.lexeme, dest=dest, imm17=imm17)
 
     def _parse_OP_JUMP(self):
         """
         OP_JUMP           = "BRN" | "BRP" | "BRZ" | "JAL" | "JMP" | "INTER"
         """
-        token = self._expect(TokenType.OP_JUMP)
-        if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL]):
-            syntax_error(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM, TokenType.SYMBOL])
+        opcode = self._expect(TokenType.OP_JUMP)
+        if self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
+            offset26 = self._parse_numerical_value()
+        else:
+            label = self._expect(TokenType.SYMBOL)
+            # Calculate offset
+            try:
+                start = self.symbol_table[label.lexeme]
+            except KeyError:
+                syntax_error(label, msg=f"{label.lexeme} is not defined")
+                return
 
-        offset26 = self._vet_numerical_value(self._get_token())
-        return Instruction(opcode=token, offset26=offset26)
+            offset26 =((self.line_no - start) + 2) * 4
+            if start < self.line_no:
+                offset26 *= -1
 
-    def _vet_numerical_value(self, value):
-        num = self._vet_dec_num(value)
-        if not num:
-            num = self._vet_hex_num(value)
-        if not num:
-            syntax_error(value, [TokenType.HEX_NUM, TokenType.DEC_NUM])
+        return Instruction(opcode=opcode.lexeme, offset26=offset26)
+
+    def _parse_numerical_value(self):
+        if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
+            syntax_error(self._peek(1), expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
+        value = self._get_token()
+        num = self._vet_dec_num(value.lexeme)
+        if num is None:
+            num = self._vet_hex_num(value.lexeme)
+        if num is None:
+            syntax_error(value, expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
         return num
 
-    def _vet_hex_num(self, value):
+    @staticmethod
+    def _vet_hex_num(value):
         try:
-            return bytes.fromhex(value)
+            return int.from_bytes(bytes.fromhex(value), "little")
         except ValueError:
             return
 
-    def _vet_dec_num(self, value):
+    @staticmethod
+    def _vet_dec_num(value):
         try:
             return int(value)
         except ValueError:
             return
 
-    def _vet_register(self, value):
+    @staticmethod
+    def _vet_register(value):
         try:
-            return REGISTERS[value]
+            return REGISTERS[value.upper()]
         except KeyError:
             return
 
@@ -557,9 +608,9 @@ def assemble_executable(program_list):
     out = bytearray()
     curr = program_list
     while curr is not None:
-        opcode = curr.opcode.lexeme.upper()
+        opcode = curr.opcode.upper()
         try:
-            instr_format = instruction_formats[opcode]
+            instr_format = INSTRUCTION_FORMATS[opcode]
         except KeyError:
             assembler_error(curr, f"{opcode} has an unknown format")
             return
@@ -585,9 +636,7 @@ def main():
     if len(sys.argv) != 2:
         print(USAGE)
         sys.exit(1)
-
     filepath = sys.argv[1]
-
     try:
         with open(filepath, 'r') as file:
             program_text = file.readlines()
@@ -604,12 +653,14 @@ def main():
     # Parse
     parser = Parser(tokens, symbol_table)
     program_list = parser.parse_program()
-    # curr = program_list
-    # while curr is not None:
-    #     print(curr)
-    #     curr = curr.next
+    curr = program_list
+    while curr is not None:
+        print(curr)
+        curr = curr.next
+    print("Symbols: ")
+    print(parser.symbol_table)
     # Convert to LC32 machine code
-    executable = assemble_executable(program_list)
+    # executable = assemble_executable(program_list)
 
 
 if __name__ == '__main__':
