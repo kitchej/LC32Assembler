@@ -9,7 +9,7 @@ OPI_THREE_OPERAND = "ADDI" | "ANDI" | "ORI" | "SUBI" | "XORI"
 OPI_TWO_OPERAND   = "LB" | "LW" | "SB" | "SW"
 OP_JUMP           = "BRN" | "BRP" | "BRZ" | "JAL" | "JMP" | "INTER"
 CHAR              = a..z  | A..Z
-DIGIT             = 0..9
+DIGIT             = [-] 0..9
 HEX_DIGIT         = DIGIT | a..f | A..F
 REGISTER          = (a, r, s, t, v) DIGIT {DIGIT}
 
@@ -48,36 +48,7 @@ PARSER.add_argument("-x", "--hexdump", action="store_true", help="Show hex dump 
 PARSER.add_argument("-o", "--output", help="Path to outputfile")
 ARGS = PARSER.parse_args()
 
-"""AI CODE START"""
-
-
-class TokenType(Enum):
-    END_OF_FILE = auto()
-
-    # Opcodes
-    OP_NO_OPERAND = auto()
-    OPR_ONE_OPERAND = auto()
-    OPR_TWO_OPERAND = auto()
-    OPR_THREE_OPERAND = auto()
-    OPI_TWO_OPERAND = auto()
-    OPI_THREE_OPERAND = auto()
-    OP_JUMP = auto()
-
-    # Other tokens
-    HEX_NUM = auto()
-    DEC_NUM = auto()
-    SYMBOL = auto()
-    LABEL = auto()
-    DIRECTIVE = auto()
-
-
-class Token(NamedTuple):
-    lexeme: str
-    type: TokenType
-    line_no: int
-
-
-# Reserved keywords, one list per instruction shape
+KEYWORD_TABLE = {}
 OP_NO_OPERAND_KEYWORDS = ["NOP", "HALT", "RET", "RETI"]
 OPR_ONE_OPERAND_KEYWORDS = ["JALA"]
 OPR_TWO_OPERAND_KEYWORDS = ["NOT", "LBI", "LWI", "SBI", "SWI"]
@@ -85,25 +56,6 @@ OPR_THREE_OPERAND_KEYWORDS = ["ADD", "AND", "DIV", "LBS", "MULT", "OR", "RBS", "
 OPI_TWO_OPERAND_KEYWORDS = ["LB", "LW", "SB", "SW"]
 OPI_THREE_OPERAND_KEYWORDS = ["ADDI", "ANDI", "ORI", "SUBI", "XORI"]
 OP_JUMP_KEYWORDS = ["BRN", "BRP", "BRZ", "JAL", "JMP", "INTER"]
-
-KEYWORD_TABLE = {}
-for words, type in [
-    (OP_NO_OPERAND_KEYWORDS, TokenType.OP_NO_OPERAND),
-    (OPR_ONE_OPERAND_KEYWORDS, TokenType.OPR_ONE_OPERAND),
-    (OPR_TWO_OPERAND_KEYWORDS, TokenType.OPR_TWO_OPERAND),
-    (OPR_THREE_OPERAND_KEYWORDS, TokenType.OPR_THREE_OPERAND),
-    (OPI_TWO_OPERAND_KEYWORDS, TokenType.OPI_TWO_OPERAND),
-    (OPI_THREE_OPERAND_KEYWORDS, TokenType.OPI_THREE_OPERAND),
-    (OP_JUMP_KEYWORDS, TokenType.OP_JUMP),
-]:
-    for w in words:
-        KEYWORD_TABLE[w] = type
-
-
-def classify_symbol(lexeme: str) -> TokenType:
-    """Return the opcode token type if lexeme is reserved, else SYMBOL."""
-    return KEYWORD_TABLE.get(lexeme.upper(), TokenType.SYMBOL)
-
 
 INSTRUCTION_FORMATS = {
     "NOP": "R",
@@ -117,7 +69,7 @@ INSTRUCTION_FORMATS = {
     "DIV": "R",
     "JAL": "J",
     "JMP": "J",
-    "JAlA": "R",
+    "JALA": "R",
     "LB": "I",
     "LBI": "I",
     "LBS": "R",
@@ -206,26 +158,69 @@ OPCODES = {
     'RETI': 33,
 }
 
+"""AI CODE START"""
+
+
+class TokenType(Enum):
+    END_OF_FILE = auto()
+
+    # Opcodes
+    OP_NO_OPERAND = auto()
+    OPR_ONE_OPERAND = auto()
+    OPR_TWO_OPERAND = auto()
+    OPR_THREE_OPERAND = auto()
+    OPI_TWO_OPERAND = auto()
+    OPI_THREE_OPERAND = auto()
+    OP_JUMP = auto()
+
+    # Other tokens
+    HEX_NUM = auto()
+    DEC_NUM = auto()
+    SYMBOL = auto()
+    LABEL = auto()
+    DIRECTIVE = auto()
+
+
+for words, type in [
+    (OP_NO_OPERAND_KEYWORDS, TokenType.OP_NO_OPERAND),
+    (OPR_ONE_OPERAND_KEYWORDS, TokenType.OPR_ONE_OPERAND),
+    (OPR_TWO_OPERAND_KEYWORDS, TokenType.OPR_TWO_OPERAND),
+    (OPR_THREE_OPERAND_KEYWORDS, TokenType.OPR_THREE_OPERAND),
+    (OPI_TWO_OPERAND_KEYWORDS, TokenType.OPI_TWO_OPERAND),
+    (OPI_THREE_OPERAND_KEYWORDS, TokenType.OPI_THREE_OPERAND),
+    (OP_JUMP_KEYWORDS, TokenType.OP_JUMP),
+]:
+    for w in words:
+        KEYWORD_TABLE[w] = type
+
+
+class Token(NamedTuple):
+    lexeme: str
+    type: TokenType
+    line_no: int
+
+
+def classify_symbol(lexeme: str) -> TokenType:
+    """Return the opcode token type if lexeme is reserved, else SYMBOL."""
+    return KEYWORD_TABLE.get(lexeme.upper(), TokenType.SYMBOL)
+
 
 def encode_rtype(opcode, dest, src, trgt, shamt):
     """
     R-type format:
     **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [21-16: 5 bits] | **TRGT** [15-11: 5 bits] |**SHMAT** [10-6: 5 bits] | **Unused** [5-0: 6 bits]
     """
-    if opcode == 14 or opcode == 21:
-        instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11)
-    else:
-        trgt = 0
-        instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11) | (shamt << 6)
+    instruction = ((opcode & 0x3F) << 26) | ((dest & 0x1F) << 21) | ((src & 0x1F) << 16) | ((trgt & 0x1F) << 11) | (
+            (shamt & 0x1F) << 6)
     return instruction & 0xFFFFFFFF
 
 
 def encode_itype(opcode, dest, src, imm16):
     """
     I-type format:
-    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [20-16: 5 bits] | **IMM-17** [16-0: 17 bits]
+    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [20-16: 5 bits] | **IMM-16** [15-0: 16 bits]
     """
-    instruction = (opcode << 26) | (dest << 21) | (src << 17) | (imm16 & 0x1FFFF)
+    instruction = ((opcode & 0x3F) << 26) | ((dest & 0x1F) << 21) | ((src & 0x1F) << 16) | (imm16 & 0xFFFF)
     return instruction & 0xFFFFFFFF
 
 
@@ -235,7 +230,7 @@ def encode_jtype(opcode, offset26):
     [opcode:6][offset26:26]
     Bits: 31-26  25-0
     """
-    instruction = (opcode << 26) | (offset26 & 0x3FFFFFF)
+    instruction = ((opcode & 0x3F) << 26) | (offset26 & 0x3FFFFFF)
     return instruction & 0xFFFFFFFF
 
 
@@ -288,8 +283,8 @@ def syntax_error(token, expected=None, msg=None):
     if expected is None and msg is not None:
         print(msg)
     elif msg is None and expected is not None:
-        print(
-            f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, but got {token.type} instead.")
+        print(f"Syntax error on line {token.line_no}: '{token.lexeme}'\nExpected {expected}, "
+              f"but got {token.type} instead.")
 
     elif msg and expected:
         raise TooManyArguments("Cannot supply both a msg and an expected token")
@@ -321,40 +316,30 @@ def assembler_error(instruction, msg):
 
 
 def lexical_analysis(lines: list):
-    """
-    1.) Split each line by space
-    2.) loop through all lines
-        a.) Loop through each token
-        b.) If token starts with '.' -> DIRECTIVE
-        c.) If token ends with ':' -> LABEL
-        d.) If token starts with '$' -> HEX_NUM
-        e.) If token numeric -> NUM
-        d.) else SYMBOL
-    """
     tokens = []
     symbol_table = {}
     line_no = 1
     for line in [line.split() for line in lines]:
         for lexeme in line:
-            if lexeme[0] == '.':
-                # Execute directive
+            if lexeme[0] == '.':  # Directive
                 break
-            elif lexeme[0] == ';':
+            elif lexeme[0] == ';':  # Comment
+
                 break
-            elif lexeme[-1] == ':':
+            elif lexeme[-1] == ':':  # Label
                 label = lexeme.strip(':')
                 if symbol_table.get(label):
                     syntax_error(line_no, msg=f"Label '{label}' is already defined on line {symbol_table.get(label)}")
-                elif REGISTERS.get(label.upper()) or OPCODES.get(label.upper()):
+                elif label.upper() in REGISTERS or label.upper() in OPCODES:
                     syntax_error(line_no, msg=f"Label '{label}' is a reserved keyword")
                 else:
                     symbol_table.update({label: line_no})
 
-            elif lexeme[0] == '$':
+            elif lexeme[0] == '$':  # Hex
                 tokens.append(Token(lexeme.strip('$'), TokenType.HEX_NUM, line_no))
-            elif lexeme.isnumeric():
+            elif lexeme.isnumeric() or (lexeme[0] == '-' and lexeme[1:].isnumeric()):  # Decimal number
                 tokens.append(Token(lexeme, TokenType.DEC_NUM, line_no))
-            else:
+            else:  # Symbol
                 token = Token(lexeme, classify_symbol(lexeme), line_no)
                 tokens.append(token)
                 if token.type in [TokenType.OP_JUMP, TokenType.OP_NO_OPERAND,
@@ -407,7 +392,7 @@ class Parser:
 
     def _peek(self, how_far):
         """
-        Look ahead to tokens comming up
+        Look ahead to tokens coming up
         """
         if len(self.tokens) == 0:
             return Token("", TokenType.END_OF_FILE, 0)
@@ -444,6 +429,9 @@ class Parser:
         return token.type in token_set
 
     def _parse_instruction_list(self):
+        """
+        Instruction_list = (DIRECTIVE | LABEL | Instruction) {DIRECTIVE | LABEL | Instruction}
+        """
         next_token = self._peek(1)
         instruction_list = None
         current_instruction = None
@@ -465,7 +453,7 @@ class Parser:
 
     def _parse_Instruction(self):
         """
-        Instruction_list = (DIRECTIVE | LABEL | Instruction) {DIRECTIVE | LABEL | Instruction}
+        Instruction      = ROpcode | IOpcode | JOpcode | OP_NO_OPERAND
         """
         token = self._peek(1)
         if token.type == TokenType.END_OF_FILE:
@@ -503,8 +491,10 @@ class Parser:
         OPR_ONE_OPERAND   = "JALA"
         """
         opcode = self._expect(TokenType.OPR_ONE_OPERAND)
-        src = self._vet_register(self._expect(TokenType.SYMBOL))
-
+        src_tok = self._expect(TokenType.SYMBOL)
+        src = self._vet_register(src_tok.lexeme)
+        if src is None:
+            syntax_error(src_tok, "valid register")
         return Instruction(opcode=opcode.lexeme, src=src)
 
     def _parse_OPR_TWO_OPERAND(self):
@@ -512,8 +502,14 @@ class Parser:
         OPR_TWO_OPERAND   = "NOT" | "LBI" | "LWI" | "SBI" | "SWI"
         """
         opcode = self._expect(TokenType.OPR_TWO_OPERAND)
-        dest = self._vet_register(self._expect(TokenType.SYMBOL))
-        src = self._vet_register(self._expect(TokenType.SYMBOL))
+        dest_tok = self._expect(TokenType.SYMBOL)
+        src_tok = self._expect(TokenType.SYMBOL)
+        dest = self._vet_register(dest_tok.lexeme)
+        src = self._vet_register(src_tok.lexeme)
+        if dest is None:
+            syntax_error(dest_tok, "valid register")
+        if src is None:
+            syntax_error(src_tok, "valid register")
         return Instruction(opcode=opcode.lexeme, dest=dest, src=src)
 
     def _parse_OPR_THREE_OPERAND(self):
@@ -537,7 +533,7 @@ class Parser:
             trgt_tok = self._expect(TokenType.SYMBOL)
             trgt = self._vet_register(trgt_tok.lexeme)
             if trgt is None:
-                syntax_error(dest_tok, "valid register")
+                syntax_error(trgt_tok, "valid register")
         return Instruction(opcode=opcode.lexeme, dest=dest, src=src, trgt=trgt, shamt=shamt)
 
     def _parse_OPI_THREE_OPERAND(self):
@@ -579,13 +575,14 @@ class Parser:
             offset26 = self._parse_numerical_value()
         else:
             label = self._expect(TokenType.SYMBOL)
-            # Calculate offset
             try:
                 start = self.symbol_table[label.lexeme]
             except KeyError:
                 syntax_error(label, msg=f"{label.lexeme} is not defined")
                 return
 
+            # Must account for pc + 4 at end of each instruction.
+            # In this case, we are working with a word offset, so we add 1 to offset current line and 1 for pc + 4
             offset26 = ((self.line_no - start) + 2)
             offset26 *= -1
 
@@ -596,16 +593,16 @@ class Parser:
             syntax_error(self._peek(1), expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
         value = self._get_token()
         num = self._vet_dec_num(value.lexeme)
-        if num is None:
+        if value.type == TokenType.HEX_NUM:
             num = self._vet_hex_num(value.lexeme)
-        if num is None:
-            syntax_error(value, expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
+        if value.type == TokenType.DEC_NUM:
+            num = self._vet_dec_num(value.lexeme)
         return num
 
     @staticmethod
     def _vet_hex_num(value):
         try:
-            return int.from_bytes(bytes.fromhex(value), "little")
+            return int(value, 16)
         except ValueError:
             return
 
