@@ -44,6 +44,7 @@ import argparse
 PARSER = argparse.ArgumentParser(description="Assembler for the LC32")
 PARSER.add_argument("filename", help="Assembly file to assemble")
 PARSER.add_argument("-d", "--debug", action="store_true", help="Print debugging output")
+PARSER.add_argument("-x", "--hexdump", action="store_true", help="Show hex dump of executable")
 PARSER.add_argument("-o", "--output", help="Path to outputfile")
 ARGS = PARSER.parse_args()
 
@@ -158,14 +159,14 @@ REGISTERS = {
     "V1": 13,
     "SP": 14,
     "SF": 15,
-    "T1": 16,
-    "T2": 17,
-    "T3": 18,
-    "T4": 19,
-    "T5": 20,
-    "T6": 21,
-    "T7": 22,
-    "T8": 23,
+    "T0": 16,
+    "T1": 17,
+    "T2": 18,
+    "T3": 19,
+    "T4": 20,
+    "T5": 21,
+    "T6": 22,
+    "T7": 23,
 }
 
 OPCODES = {
@@ -657,7 +658,7 @@ def assemble_executable(program_list):
     for instr in instructions:
         write_uint32_to_buffer(buffer, offset, instr)
         offset += 4
-    if ARGS.debug:
+    if ARGS.hexdump:
         print_word_hexdump(buffer, 0, offset)
     return buffer
 
@@ -667,13 +668,13 @@ def main():
         with open(ARGS.filename, 'r') as file:
             input_program = file.readlines()
     except FileNotFoundError:
-        print(f"Could not open {ARGS.filepath} because it does not exist")
+        print(f"Could not open {ARGS.filename} because it does not exist")
         sys.exit(2)
     except PermissionError:
-        print(f"Could not open {ARGS.filepath} because user does not have permission")
+        print(f"Could not open {ARGS.filename} because user does not have permission")
         sys.exit(3)
     except OSError:
-        print(f"Could not open {ARGS.filepath}")
+        print(f"Could not open {ARGS.filename}")
         sys.exit(4)
     instruction_offset = 0
     data_offset = 0
