@@ -3,7 +3,7 @@ xor r0 r0 r0 ; Loop Counter
 xor r1 r1 r1 ; Loop Guard
 xor r2 r2 r2 ; Value to increment
 xor t0 t0 t0 ; Temporary for holding result of guard - counter
-addi r1 r1 10
+addi r1 r1 3
 addi r2 r2 $01
 loop:
 addi r2 r2 1  ; increment r2 by 1

@@ -386,17 +386,14 @@ class Instruction:
     next: Optional["Instruction"] = None
 
     def __str__(self):
-        if self.opcode != "":
-            if self.trgt != "":
-                return f"{self.opcode} {self.dest} {self.src} {self.trgt}"
-            elif self.shamt != "":
-                return f"{self.opcode} {self.dest} {self.shamt}"
-            elif self.imm16 != "":
-                return f"{self.opcode} {self.dest} {self.src} {self.imm16}"
-            elif self.offset26 != "":
-                return f"{self.opcode} {self.offset26}"
-            else:
-                return self.directive
+        if INSTRUCTION_FORMATS[self.opcode.upper()] == "R":
+            return f"{self.opcode} {self.dest=} {self.src=} {self.trgt=} {self.shamt=}"
+        elif INSTRUCTION_FORMATS[self.opcode.upper()] == "I":
+            return f"{self.opcode} {self.dest=} {self.src=} {self.imm16=}"
+        elif INSTRUCTION_FORMATS[self.opcode.upper()] == "J":
+            return f"{self.opcode} {self.offset26=}"
+        else:
+            return self.directive
 
 
 class Parser:
@@ -499,16 +496,16 @@ class Parser:
         OP_NO_OPERAND     = "NOP" | "HALT" | "RET" | "RETI"
         """
         opcode = self._expect(TokenType.OP_NO_OPERAND)
-        return Instruction(opcode=opcode)
+        return Instruction(opcode=opcode.lexeme)
 
     def _parse_OPR_ONE_OPERAND(self):
         """
         OPR_ONE_OPERAND   = "JALA"
         """
-        token = self._expect(TokenType.OPR_ONE_OPERAND)
+        opcode = self._expect(TokenType.OPR_ONE_OPERAND)
         src = self._vet_register(self._expect(TokenType.SYMBOL))
 
-        return Instruction(opcode=token, src=src)
+        return Instruction(opcode=opcode.lexeme, src=src)
 
     def _parse_OPR_TWO_OPERAND(self):
         """
@@ -517,7 +514,7 @@ class Parser:
         opcode = self._expect(TokenType.OPR_TWO_OPERAND)
         dest = self._vet_register(self._expect(TokenType.SYMBOL))
         src = self._vet_register(self._expect(TokenType.SYMBOL))
-        return Instruction(opcode=opcode, dest=dest, src=src)
+        return Instruction(opcode=opcode.lexeme, dest=dest, src=src)
 
     def _parse_OPR_THREE_OPERAND(self):
         """
@@ -589,9 +586,8 @@ class Parser:
                 syntax_error(label, msg=f"{label.lexeme} is not defined")
                 return
 
-            offset26 = ((self.line_no - start) + 2) * 4
-            if start < self.line_no:
-                offset26 *= -1
+            offset26 = ((self.line_no - start) + 2)
+            offset26 *= -1
 
         return Instruction(opcode=opcode.lexeme, offset26=offset26)
 
@@ -639,7 +635,6 @@ def assemble_executable(program_list):
         except KeyError:
             assembler_error(curr, f"{opcode} has an unknown format")
             return
-
         try:
             opcode = OPCODES[opcode]
         except KeyError:
