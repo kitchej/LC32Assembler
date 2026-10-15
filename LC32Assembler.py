@@ -25,7 +25,7 @@ JOpcode          = OP_JUMP (label | HEX_HUM | DEC_NUM)
 dest             = symbol
 src              = symbol
 trgt             = symbol
-imm17            = hex_num | dec_num
+imm16            = hex_num | dec_num
 offset26         = hex_num | dec_num
 directive        = .symbol
 label            = symbol:
@@ -39,10 +39,13 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import NamedTuple, Optional
 import traceback
+import argparse
 
-USAGE = "LC32Assembler.py (filepath)"
-MAX_UINT_32 = 0xFFFFFFFF
-DEBUG = True
+PARSER = argparse.ArgumentParser(description="Assembler for the LC32")
+PARSER.add_argument("filename", help="Assembly file to assemble")
+PARSER.add_argument("-d", "--debug", action="store_true", help="Print debugging output")
+PARSER.add_argument("-o", "--output", help="Path to outputfile")
+ARGS = PARSER.parse_args()
 
 """AI CODE START"""
 
@@ -203,21 +206,25 @@ OPCODES = {
 }
 
 
-def encode_rtype(opcode, dest, src, trgt):
+def encode_rtype(opcode, dest, src, trgt, shamt):
     """
     R-type format:
     **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [21-16: 5 bits] | **TRGT** [15-11: 5 bits] |**SHMAT** [10-6: 5 bits] | **Unused** [5-0: 6 bits]
     """
-    instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11)
+    if opcode == 14 or opcode == 21:
+        instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11)
+    else:
+        trgt = 0
+        instruction = (opcode << 26) | (dest << 21) | (src << 16) | (trgt << 11) | (shamt << 6)
     return instruction & 0xFFFFFFFF
 
 
-def encode_itype(opcode, dest, src, imm17):
+def encode_itype(opcode, dest, src, imm16):
     """
     I-type format:
     **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [20-16: 5 bits] | **IMM-17** [16-0: 17 bits]
     """
-    instruction = (opcode << 26) | (dest << 21) | (src << 17) | (imm17 & 0x1FFFF)
+    instruction = (opcode << 26) | (dest << 21) | (src << 17) | (imm16 & 0x1FFFF)
     return instruction & 0xFFFFFFFF
 
 
@@ -241,6 +248,20 @@ def write_uint32_to_buffer(buffer, offset, value):
         value: 32-bit unsigned integer value
     """
     buffer[offset:offset + 4] = struct.pack('<I', value & 0xFFFFFFFF)
+
+
+def print_word_hexdump(buffer, start_offset, end_offset):
+    """
+    Print a 4-byte-per-row hexdump of the buffer, reading each row as a
+    little-endian uint32_t (matching memoryController::readWord's byte assembly), so the
+    printed value is exactly what the CPU will decode -- no manual byte
+    reversal needed to compare against expected instruction values.
+
+    Equivalent to: hexdump -e '"%08_ax: " 1/4 "%08x" "\\n"' dummy_file.bin
+    """
+    for offset in range(start_offset, end_offset, 4):
+        word = struct.unpack_from('<I', buffer, offset)[0]
+        print(f"{offset:08x}: {word:08x}")
 
 
 """AI CODE END"""
@@ -273,7 +294,7 @@ def syntax_error(token, expected=None, msg=None):
         raise TooManyArguments("Cannot supply both a msg and an expected token")
     elif msg is None and expected is None:
         raise MissingErrorArgument("Must supply either a msg or an expected token")
-    if DEBUG:
+    if ARGS.debug:
         traceback.print_stack()
     sys.exit(5)
 
@@ -283,7 +304,7 @@ def parser_error(line_no, msg):
     For when parser itself fails
     """
     print(f"Parser error while parsing line {line_no}: {msg}")
-    if DEBUG:
+    if ARGS.debug:
         traceback.print_stack()
     sys.exit(6)
 
@@ -293,7 +314,7 @@ def assembler_error(instruction, msg):
     For when the assembling step breaks
     """
     print(f"Error while assembling {instruction.opcode} instruction: {msg}")
-    if DEBUG:
+    if ARGS.debug:
         traceback.print_stack()
     sys.exit(7)
 
@@ -316,6 +337,8 @@ def lexical_analysis(lines: list):
         for lexeme in line:
             if lexeme[0] == '.':
                 # Execute directive
+                break
+            elif lexeme[0] == ';':
                 break
             elif lexeme[-1] == ':':
                 label = lexeme.strip(':')
@@ -351,14 +374,14 @@ Returns: linked list of Instruction objects
 
 @dataclass
 class Instruction:
-    opcode: str = ""
-    dest: str = ""
-    src: str = ""
-    trgt: str = ""
-    imm17: str = ""
-    shamt: str = ""
-    offset26: str = ""
-    directive: str = ""
+    opcode: int = 0
+    dest: int = 0
+    src: int = 0
+    trgt: int = 0
+    imm16: int = 0
+    shamt: int = 0
+    offset26: int = 0
+    directive: int = 0
     next: Optional["Instruction"] = None
 
     def __str__(self):
@@ -367,8 +390,8 @@ class Instruction:
                 return f"{self.opcode} {self.dest} {self.src} {self.trgt}"
             elif self.shamt != "":
                 return f"{self.opcode} {self.dest} {self.shamt}"
-            elif self.imm17 != "":
-                return f"{self.opcode} {self.dest} {self.src} {self.imm17}"
+            elif self.imm16 != "":
+                return f"{self.opcode} {self.dest} {self.src} {self.imm16}"
             elif self.offset26 != "":
                 return f"{self.opcode} {self.offset26}"
             else:
@@ -508,8 +531,8 @@ class Parser:
             syntax_error(dest_tok, "valid register")
         if src is None:
             syntax_error(src_tok, "valid register")
-        shamt = -1
-        trgt = -1
+        shamt = 0
+        trgt = 0
         if opcode.lexeme.upper() == "LBS" or opcode.lexeme.upper() == "RBS":
             shamt = self._parse_numerical_value()
         else:
@@ -534,8 +557,8 @@ class Parser:
             syntax_error(src_tok, "valid register")
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
             syntax_error(self._peek(1), expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
-        imm17 = self._parse_numerical_value()
-        return Instruction(opcode=opcode.lexeme, dest=dest, src=src, imm17=imm17)
+        imm16 = self._parse_numerical_value()
+        return Instruction(opcode=opcode.lexeme, dest=dest, src=src, imm16=imm16)
 
     def _parse_OPI_TWO_OPERAND(self):
         """
@@ -546,8 +569,8 @@ class Parser:
         dest = self._vet_register(dest_tok.lexeme)
         if dest is None:
             syntax_error(dest_tok, "valid register")
-        imm17 = self._parse_numerical_value()
-        return Instruction(opcode=opcode.lexeme, dest=dest, imm17=imm17)
+        imm16 = self._parse_numerical_value()
+        return Instruction(opcode=opcode.lexeme, dest=dest, imm16=imm16)
 
     def _parse_OP_JUMP(self):
         """
@@ -565,7 +588,7 @@ class Parser:
                 syntax_error(label, msg=f"{label.lexeme} is not defined")
                 return
 
-            offset26 =((self.line_no - start) + 2) * 4
+            offset26 = ((self.line_no - start) + 2) * 4
             if start < self.line_no:
                 offset26 *= -1
 
@@ -605,8 +628,9 @@ class Parser:
 
 
 def assemble_executable(program_list):
-    out = bytearray()
+    instructions = []
     curr = program_list
+    offset = 0
     while curr is not None:
         opcode = curr.opcode.upper()
         try:
@@ -622,45 +646,62 @@ def assemble_executable(program_list):
             return
 
         if instr_format == "R":
-            instruction = encode_rtype(opcode, curr.dest, curr.src, curr.trgt)
+            instructions.append(encode_rtype(opcode, curr.dest, curr.src, curr.trgt, curr.shamt))
         elif instr_format == "I":
-            instruction = encode_itype(opcode, curr.dest, curr.src, curr.imm17)
+            instructions.append(encode_itype(opcode, curr.dest, curr.src, curr.imm16))
         elif instr_format == "J":
-            instruction = encode_jtype(opcode, curr.lexeme)
-
+            instructions.append(encode_jtype(opcode, curr.offset26))
         curr = curr.next
-    return
+
+    buffer = bytearray(len(instructions) * 4)
+    for instr in instructions:
+        write_uint32_to_buffer(buffer, offset, instr)
+        offset += 4
+    if ARGS.debug:
+        print_word_hexdump(buffer, 0, offset)
+    return buffer
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(USAGE)
-        sys.exit(1)
-    filepath = sys.argv[1]
     try:
-        with open(filepath, 'r') as file:
-            program_text = file.readlines()
+        with open(ARGS.filename, 'r') as file:
+            input_program = file.readlines()
     except FileNotFoundError:
+        print(f"Could not open {ARGS.filepath} because it does not exist")
         sys.exit(2)
     except PermissionError:
+        print(f"Could not open {ARGS.filepath} because user does not have permission")
         sys.exit(3)
     except OSError:
+        print(f"Could not open {ARGS.filepath}")
         sys.exit(4)
     instruction_offset = 0
     data_offset = 0
     # Lexical analysis
-    tokens, symbol_table = lexical_analysis(program_text)
+    print("Analyzing file")
+    tokens, symbol_table = lexical_analysis(input_program)
     # Parse
+    print("Parsing file")
     parser = Parser(tokens, symbol_table)
     program_list = parser.parse_program()
-    curr = program_list
-    while curr is not None:
-        print(curr)
-        curr = curr.next
-    print("Symbols: ")
-    print(parser.symbol_table)
+    if ARGS.debug:
+        curr = program_list
+        while curr is not None:
+            print(curr)
+            curr = curr.next
+        print("Symbols: ")
+        print(parser.symbol_table)
     # Convert to LC32 machine code
-    # executable = assemble_executable(program_list)
+    print("Assembling executable")
+    executable = assemble_executable(program_list)
+
+    if ARGS.output:
+        outfile = ARGS.output
+    else:
+        outfile = "program.out"
+    with open(outfile, "wb") as file:
+        file.write(executable)
+    print(f"Wrote {len(executable)} bytes to {outfile}")
 
 
 if __name__ == '__main__':
