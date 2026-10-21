@@ -46,6 +46,7 @@ PARSER.add_argument("filename", help="Assembly file to assemble")
 PARSER.add_argument("-d", "--debug", action="store_true", help="Print debugging output")
 PARSER.add_argument("-x", "--hexdump", action="store_true", help="Show hex dump of executable")
 PARSER.add_argument("-o", "--output", help="Path to outputfile")
+PARSER.add_argument("-k", "--kernal", action="store_true", help="Assemble system kernal")
 ARGS = PARSER.parse_args()
 
 KEYWORD_TABLE = {}
@@ -71,10 +72,10 @@ INSTRUCTION_FORMATS = {
     "JMP": "J",
     "JALA": "R",
     "LB": "I",
-    "LBI": "I",
+    "LBI": "R",
     "LBS": "R",
     "LW": "I",
-    "LWI": "I",
+    "LWI": "R",
     "MULT": "R",
     "NOT": "R",
     "OR": "R",
@@ -82,11 +83,11 @@ INSTRUCTION_FORMATS = {
     "RBS": "R",
     "RET": "J",
     "SB": "I",
-    "SBI": "I",
+    "SBI": "R",
     "SUB": "R",
     "SUBI": "I",
     "SW": "I",
-    "SWI": "I",
+    "SWI": "R",
     "INTER": "J",
     "XOR": "R",
     "XORI": "I",
@@ -208,10 +209,13 @@ def classify_symbol(lexeme: str) -> TokenType:
 def encode_rtype(opcode, dest, src, trgt, shamt):
     """
     R-type format:
-    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [21-16: 5 bits] | **TRGT** [15-11: 5 bits] |**SHMAT** [10-6: 5 bits] | **Unused** [5-0: 6 bits]
+    **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [20-16: 5 bits] | **TRGT** [15-11: 5 bits] |**SHMAT** [10-6: 5 bits] | **Unused** [5-0: 6 bits]
     """
-    instruction = ((opcode & 0x3F) << 26) | ((dest & 0x1F) << 21) | ((src & 0x1F) << 16) | ((trgt & 0x1F) << 11) | (
-            (shamt & 0x1F) << 6)
+    instruction = (((opcode & 0x3F) << 26) |
+                   ((dest & 0x1F) << 21) |
+                   ((src & 0x1F) << 16) |
+                   ((trgt & 0x1F) << 11) |
+                   ((shamt & 0x1F) << 6))
     return instruction & 0xFFFFFFFF
 
 
@@ -220,7 +224,10 @@ def encode_itype(opcode, dest, src, imm16):
     I-type format:
     **OPCODE** [31-26: 6 bits] | **DEST** [25-21: 5 bits] | **SRC** [20-16: 5 bits] | **IMM-16** [15-0: 16 bits]
     """
-    instruction = ((opcode & 0x3F) << 26) | ((dest & 0x1F) << 21) | ((src & 0x1F) << 16) | (imm16 & 0xFFFF)
+    instruction = (((opcode & 0x3F) << 26) |
+                   ((dest & 0x1F) << 21) |
+                   ((src & 0x1F) << 16) |
+                   (imm16 & 0xFFFF))
     return instruction & 0xFFFFFFFF
 
 
@@ -230,7 +237,8 @@ def encode_jtype(opcode, offset26):
     [opcode:6][offset26:26]
     Bits: 31-26  25-0
     """
-    instruction = ((opcode & 0x3F) << 26) | (offset26 & 0x3FFFFFF)
+    instruction = (((opcode & 0x3F) << 26) |
+                   (offset26 & 0x3FFFFFF))
     return instruction & 0xFFFFFFFF
 
 
@@ -309,11 +317,45 @@ def assembler_error(instruction, msg):
     """
     For when the assembling step breaks
     """
-    print(f"Error while assembling {instruction.opcode} instruction: {msg}")
+    print(f"Error while assembling {instruction} instruction: {msg}")
     if ARGS.debug:
         traceback.print_stack()
     sys.exit(7)
 
+def general_error(msg, exit_code):
+    print(msg)
+    if ARGS.debug:
+        traceback.print_stack()
+    sys.exit(exit_code)
+
+def fill_string(size, string=None):
+    """
+    .fill_string [size in bytes] [string]
+    Reserves memory and places either a value or characters of a string
+    """
+    pass
+
+def reserve(size):
+    """
+    .reserve [size in bytes]
+    Reserves memory
+    """
+    pass
+
+def orig(address):
+    """
+    .orig [memory address]
+    Sets start of program in memory
+    """
+    pass
+
+def define(name, value):
+    """
+    .define [name] [value]
+    Defines a constant that will be replaced everywhere it is found in the file
+    If a name is defined, it cannot be used as a label, and vice versa
+    (We'll just add it to the symbol table)
+    """
 
 def lexical_analysis(lines: list):
     tokens = []
@@ -360,7 +402,7 @@ Returns: linked list of Instruction objects
 
 @dataclass
 class Instruction:
-    opcode: int = 0
+    opcode: any = None
     dest: int = 0
     src: int = 0
     trgt: int = 0
@@ -592,10 +634,10 @@ class Parser:
         if not self._first(self._peek(1), [TokenType.HEX_NUM, TokenType.DEC_NUM]):
             syntax_error(self._peek(1), expected=[TokenType.HEX_NUM, TokenType.DEC_NUM])
         value = self._get_token()
-        num = self._vet_dec_num(value.lexeme)
+        num = 0
         if value.type == TokenType.HEX_NUM:
             num = self._vet_hex_num(value.lexeme)
-        if value.type == TokenType.DEC_NUM:
+        elif value.type == TokenType.DEC_NUM:
             num = self._vet_dec_num(value.lexeme)
         return num
 
@@ -621,6 +663,33 @@ class Parser:
             return
 
 
+def assemble_kernal(kernal_funcs: list, program_list, symbol_table):
+    exe = assemble_executable(program_list)
+    kernal_rom = bytearray(0x4000)
+    kernal_rom[:len(exe)] = exe
+    interrupt_table_start = 0x3FFC
+    next_entry = 0
+    for kernal_func in kernal_funcs:
+        offset = interrupt_table_start - next_entry
+        if not len(exe) < offset <= interrupt_table_start:
+            general_error(f"Error while adding {kernal_func} to interrupt table: No more room in interrupt table\n"
+                          f"{offset=} but range is {len(exe)} to {interrupt_table_start}", 8)
+        try:
+            kernal_rom[offset] = symbol_table[kernal_func] * 4  # Covert from word offset to byte offset
+        except IndexError:
+            general_error(f"Error while adding {kernal_func} to interrupt table: Invalid index of {offset}", 9)
+        except KeyError:
+            general_error(f"{kernal_func} is not defined in the symbol table. "
+                                         f"It must be defined before adding to the interrupt table.", 10)
+        if ARGS.debug:
+            print(f"{kernal_func=}, address={symbol_table[kernal_func]}")
+        next_entry += 4
+
+    if ARGS.hexdump:
+        print_word_hexdump(kernal_rom, next_entry, len(kernal_rom))
+    return kernal_rom
+
+
 def assemble_executable(program_list):
     instructions = []
     curr = program_list
@@ -630,12 +699,12 @@ def assemble_executable(program_list):
         try:
             instr_format = INSTRUCTION_FORMATS[opcode]
         except KeyError:
-            assembler_error(curr, f"{opcode} has an unknown format")
+            assembler_error(curr.opcode, f"{opcode} has an unknown format")
             return
         try:
             opcode = OPCODES[opcode]
         except KeyError:
-            assembler_error(curr, f"{opcode} is not a valid instruction")
+            assembler_error(curr.opcode, f"{opcode} is not a valid instruction")
             return
 
         if instr_format == "R":
@@ -685,15 +754,29 @@ def main():
         print("Symbols: ")
         print(parser.symbol_table)
     # Convert to LC32 machine code
-    print("Assembling executable")
-    executable = assemble_executable(program_list)
+    if ARGS.kernal:
+        print("Building kernal")
+        executable = assemble_kernal(["putc"], program_list, parser.symbol_table)
+    else:
+        print("Assembling executable")
+        executable = assemble_executable(program_list)
 
     if ARGS.output:
         outfile = ARGS.output
     else:
         outfile = "program.out"
-    with open(outfile, "wb") as file:
-        file.write(executable)
+    try:
+        with open(outfile, "wb") as file:
+            file.write(executable)
+    except FileNotFoundError:
+        print(f"Could not open {outfile} because it does not exist")
+        sys.exit(5)
+    except PermissionError:
+        print(f"Could not open {outfile} because user does not have permission")
+        sys.exit(6)
+    except OSError:
+        print(f"Could not open {outfile}")
+        sys.exit(7)
     print(f"Wrote {len(executable)} bytes to {outfile}")
 
 

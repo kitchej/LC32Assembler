@@ -10,7 +10,6 @@ xor ra ra ra
 xor a0 a0 a0
 xor a1 a1 a1
 xor a2 a2 a2
-xor a3 a3 a3
 xor v0 v0 v0
 xor v1 v1 v1
 xor sp sp sp
