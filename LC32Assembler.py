@@ -669,18 +669,20 @@ def assemble_kernal(kernal_funcs: list, program_list, symbol_table):
     kernal_rom[:len(exe)] = exe
     interrupt_table_start = 0x3FFC
     next_entry = 0
-    for kernal_func in kernal_funcs:
+    for vector, kernal_func in enumerate(kernal_funcs):
         offset = interrupt_table_start - next_entry
         if not len(exe) < offset <= interrupt_table_start:
             general_error(f"Error while adding {kernal_func} to interrupt table: No more room in interrupt table\n"
                           f"{offset=} but range is {len(exe)} to {interrupt_table_start}", 8)
+
         try:
-            kernal_rom[offset] = symbol_table[kernal_func] * 4  # Covert from word offset to byte offset
-        except IndexError:
-            general_error(f"Error while adding {kernal_func} to interrupt table: Invalid index of {offset}", 9)
+            address = (symbol_table[kernal_func] - 1) * 4 # Covert from word offset to byte offset
         except KeyError:
             general_error(f"{kernal_func} is not defined in the symbol table. "
                                          f"It must be defined before adding to the interrupt table.", 10)
+            return
+        entry = interrupt_table_start - vector * 4
+        write_uint32_to_buffer(exe, address, entry)
         if ARGS.debug:
             print(f"{kernal_func=}, address={symbol_table[kernal_func]}")
         next_entry += 4
